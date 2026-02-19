@@ -578,7 +578,7 @@ async function identifyMachine() {
   const muscleCtx = muscleGroup ? `Today is a ${muscleGroup} day. Prioritize exercises targeting ${muscleGroup}.` : 'List the most common exercises for this machine.';
   const prompt = `You are an expert personal trainer. Analyze this gym machine or exercise image.\n1. Identify the machine/equipment.\n2. List 4-6 exercises. ${muscleCtx}\nReturn ONLY valid JSON, no markdown:\n{"machine":"Machine name","exercises":[{"name":"Exercise","muscles":"Muscles targeted"}]}`;
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ inline_data: { mime_type: currentImageType, data: currentImageBase64 } }, { text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 700 } })
