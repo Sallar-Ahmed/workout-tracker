@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Workout">
+<meta name="apple-mobile-web-app-title" content="Sallar's Workout Logger">
 <meta name="theme-color" content="#0a0a0a">
-<title>Workout Logger</title>
+<title>Sallar's Workout Logger</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -23,7 +23,7 @@
     background: var(--bg); color: var(--text);
     font-family: 'DM Mono', monospace; min-height: 100vh;
     padding-top: max(2rem, calc(var(--safe-top) + 1rem));
-    padding-bottom: max(5rem, calc(var(--safe-bottom) + 4rem));
+    padding-bottom: max(10rem, calc(var(--safe-bottom) + 9rem));
   }
   body::before {
     content: ''; position: fixed; inset: 0;
@@ -126,7 +126,7 @@
   .actions { display: flex; gap: 0.7rem; margin-top: 0.2rem; }
   .btn-ghost { background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'DM Mono', monospace; font-size: 0.68rem; padding: 0.55rem 0.8rem; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; transition: all 0.15s; flex: 1; }
   .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
-  .btn-submit { background: var(--accent); border: none; color: #0a0a0a; font-family: 'Bebas Neue', sans-serif; font-size: 1.1rem; letter-spacing: 2px; padding: 0.9rem 2rem; cursor: pointer; width: 100%; margin-top: 0.5rem; transition: all 0.15s; }
+  .btn-submit { background: var(--accent); border: none; color: #0a0a0a; font-family: 'Bebas Neue', sans-serif; font-size: 1.1rem; letter-spacing: 2px; padding: 0.9rem 2rem; cursor: pointer; width: 100%; margin-top: 0.5rem; margin-bottom: 1rem; transition: all 0.15s; }
   .btn-submit:hover { background: #d9ff3a; }
   .btn-submit:active { transform: scale(0.99); }
   .btn-submit:disabled { background: #222; color: var(--muted); cursor: not-allowed; }
@@ -186,7 +186,7 @@
 <!-- ══ LOG PAGE ══════════════════════════════════════ -->
 <div class="page active" id="page-log">
   <header>
-    <h1>Workout<br>Logger</h1>
+    <h1>Sallar's<br>Workout Logger</h1>
     <p>Daily training record</p>
   </header>
 
@@ -304,6 +304,7 @@
     </div>
 
     <button type="submit" class="btn-submit" id="submit-btn">SAVE WORKOUT</button>
+    <div style="height:1rem"></div>
     <div class="status-msg" id="log-status"></div>
   </form>
 </div>
@@ -343,12 +344,15 @@
 let db;
 function openDB() {
   return new Promise((res, rej) => {
-    const req = indexedDB.open('WorkoutDB', 1);
+    const req = indexedDB.open('WorkoutDB', 2);
     req.onupgradeneeded = e => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('workouts')) {
         const s = d.createObjectStore('workouts', { keyPath: 'id', autoIncrement: true });
         s.createIndex('date', 'date');
+      }
+      if (!d.objectStoreNames.contains('config')) {
+        d.createObjectStore('config', { keyPath: 'key' });
       }
     };
     req.onsuccess = e => { db = e.target.result; res(db); };
@@ -385,27 +389,22 @@ function dbDelete(id) {
 //  Note: Notion's API blocks direct browser calls (CORS).
 //  We use a free CORS proxy (corsproxy.io) to relay requests.
 // ══════════════════════════════════════════════════════
-const CORS_PROXY = 'https://corsproxy.io/?';
-
 async function notionRequest(path, method, body) {
-  const token = localStorage.getItem('notion_token') || '';
-  const url = CORS_PROXY + encodeURIComponent('https://api.notion.com' + path);
-  const res = await fetch(url, {
-    method,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Notion-Version': '2022-06-28',
-      'Content-Type': 'application/json'
-    },
-    body: body ? JSON.stringify(body) : undefined
+  const token = localStorage.getItem('notion_token') || await cfgGet('notion_token');
+  const workerUrl = (localStorage.getItem('worker_url') || await cfgGet('worker_url') || '').trim().replace(/\/+$/, '');
+  if (!workerUrl) throw new Error('Worker URL not set — open Setup and add your Cloudflare Worker URL');
+  const res = await fetch(workerUrl + '/notion', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, method, token, body: body || null })
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.message || `Notion API error ${res.status}`);
+  if (!res.ok) throw new Error(data.message || data.error || `Error ${res.status}`);
   return data;
 }
 
 async function notionAddRow(record, set, setIndex) {
-  const dbId = localStorage.getItem('notion_db_id') || '';
+  const dbId = localStorage.getItem('notion_db_id') || await cfgGet('notion_db_id');
   await notionRequest('/v1/pages', 'POST', {
     parent: { database_id: dbId },
     properties: {
@@ -428,15 +427,49 @@ async function testNotionConnection() {
 }
 
 // ══════════════════════════════════════════════════════
+//  CONFIG — keys stored in IndexedDB (survives Safari clears)
+// ══════════════════════════════════════════════════════
+function cfgSet(key, val) {
+  return new Promise((res, rej) => {
+    const tx = db.transaction('config', 'readwrite');
+    tx.objectStore('config').put({ key, val });
+    tx.oncomplete = () => res();
+    tx.onerror = e => rej(e.target.error);
+  });
+}
+function cfgGet(key) {
+  return new Promise((res) => {
+    try {
+      const tx = db.transaction('config', 'readonly');
+      const req = tx.objectStore('config').get(key);
+      req.onsuccess = () => res(req.result?.val || '');
+      req.onerror = () => res('');
+    } catch(_) { res(''); }
+  });
+}
+async function cfgLoad() {
+  const keys = ['gemini_key','worker_url','notion_token','notion_db_id'];
+  const vals = await Promise.all(keys.map(k => cfgGet(k)));
+  // Also fall back to localStorage for migration
+  const [gemini, worker, nToken, nDb] = vals.map((v,i) => v || localStorage.getItem(keys[i]) || '');
+  document.getElementById('api-key').value = gemini;
+  document.getElementById('worker-url').value = worker;
+  document.getElementById('notion-token').value = nToken;
+  document.getElementById('notion-db-id').value = nDb;
+  // Mirror back to localStorage as secondary cache
+  if (gemini) localStorage.setItem('gemini_key', gemini);
+  if (worker) localStorage.setItem('worker_url', worker);
+  if (nToken) localStorage.setItem('notion_token', nToken);
+  if (nDb) localStorage.setItem('notion_db_id', nDb);
+  updateNotionBadge(!!(nToken && nDb && worker));
+}
+
+// ══════════════════════════════════════════════════════
 //  INIT
 // ══════════════════════════════════════════════════════
-openDB().then(() => {
+openDB().then(async () => {
   document.getElementById('date').valueAsDate = new Date();
-  document.getElementById('api-key').value = localStorage.getItem('gemini_key') || '';
-  document.getElementById('worker-url').value = localStorage.getItem('worker_url') || '';
-  document.getElementById('notion-token').value = localStorage.getItem('notion_token') || '';
-  document.getElementById('notion-db-id').value = localStorage.getItem('notion_db_id') || '';
-  updateNotionBadge(!!localStorage.getItem('notion_token') && !!localStorage.getItem('notion_db_id'));
+  await cfgLoad();
   initSets();
 });
 
@@ -457,12 +490,19 @@ async function saveSettings() {
   const geminiKey = document.getElementById('api-key').value.trim();
   const workerUrl = document.getElementById('worker-url').value.trim();
 
+  // Save to both IndexedDB (permanent) and localStorage (fast access)
+  await Promise.all([
+    cfgSet('gemini_key', geminiKey),
+    cfgSet('worker_url', workerUrl),
+    cfgSet('notion_token', token),
+    cfgSet('notion_db_id', dbId),
+  ]);
   localStorage.setItem('gemini_key', geminiKey);
-  if (workerUrl) localStorage.setItem('worker_url', workerUrl);
+  localStorage.setItem('worker_url', workerUrl);
+  localStorage.setItem('notion_token', token);
+  localStorage.setItem('notion_db_id', dbId);
 
   if (token && dbId) {
-    localStorage.setItem('notion_token', token);
-    localStorage.setItem('notion_db_id', dbId);
     showStatus('setup-status', '⏳ Testing Notion connection…', 'loading');
     try {
       await testNotionConnection();
@@ -614,7 +654,10 @@ document.getElementById('workout-form').addEventListener('submit', async e => {
   const btn = document.getElementById('submit-btn');
   btn.disabled = true;
 
-  const hasNotion = !!(localStorage.getItem('notion_token') && localStorage.getItem('notion_db_id'));
+  const nToken = localStorage.getItem('notion_token') || await cfgGet('notion_token');
+  const nDbId = localStorage.getItem('notion_db_id') || await cfgGet('notion_db_id');
+  const nWorker = localStorage.getItem('worker_url') || await cfgGet('worker_url');
+  const hasNotion = !!(nToken && nDbId && nWorker);
 
   if (hasNotion) {
     showStatus('log-status', '⏳ Saving to Notion…', 'loading');
